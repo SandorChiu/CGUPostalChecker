@@ -1,0 +1,24 @@
+長庚大學自動查詢郵件 - 快速手動安裝
+
+1. 將 CGUPostalChecker.zip 解壓縮到：
+   C:\Program Files\Google\ChromeExtensions\CGUPostalChecker
+
+2. Chrome 開啟：
+   chrome://extensions/
+
+3. 開啟右上角「開發人員模式」。
+
+4. 按「載入未封裝項目」，選擇：
+   C:\Program Files\Google\ChromeExtensions\CGUPostalChecker
+
+5. 開啟並登入：
+   https://www4.is.cgu.edu.tw/postal/studentletter.aspx
+
+6. 點外掛圖示 → 設定 → 新增收件人 → 儲存設定。
+   範例姓名可用：王小明
+
+7. 按「立即查詢一次」測試。
+
+8. 沒問題後按「開始監控」。
+
+完整說明請看：使用教學.md 或 使用教學.html

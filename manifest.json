@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "長庚大學自動查詢郵件",
+  "short_name": "長庚郵件查詢",
+  "version": "1.0.2",
+  "description": "自動定時查詢長庚大學郵件收發管理系統，支援多位收件人、背景紀錄、每日一次提醒。",
+  "permissions": [
+    "alarms",
+    "notifications",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www4.is.cgu.edu.tw/postal/studentletter.aspx*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www4.is.cgu.edu.tw/postal/studentletter.aspx*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "長庚大學自動查詢郵件",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

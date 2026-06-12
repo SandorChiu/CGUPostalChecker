@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>長庚大學自動查詢郵件 - 查詢紀錄</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>查詢紀錄</h1>
+    <div class="button-row">
+      <button id="refresh">重新整理</button>
+      <button id="exportJson" class="secondary">匯出 JSON</button>
+      <button id="clearLogs" class="danger">清除紀錄</button>
+    </div>
+    <p class="small">最多保留最近 500 筆紀錄。沒有郵件與今日已提醒過的查詢都只會記錄在這裡，不會跳通知。</p>
+    <div class="card">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>時間</th>
+            <th>類型</th>
+            <th>收件人</th>
+            <th>數量</th>
+            <th>訊息</th>
+          </tr>
+        </thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <script src="history.js"></script>
+</body>
+</html>
