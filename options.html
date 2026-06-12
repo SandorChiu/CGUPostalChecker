@@ -31,8 +31,8 @@
 
       <div class="row">
         <div class="col-3">
-          <label for="intervalMinutes">查詢間隔，分鐘</label>
-          <input type="number" id="intervalMinutes" min="5" step="5">
+          <label for="intervalMinutes">查詢間隔，分鐘，最低 120</label>
+          <input type="number" id="intervalMinutes" min="120" step="30">
         </div>
         <div class="col-3">
           <label for="activeStartTime">允許查詢開始</label>
@@ -50,6 +50,44 @@
 
       <label class="checkbox-label"><input type="checkbox" id="skipWeekends"> 週末不查詢</label>
       <label class="checkbox-label"><input type="checkbox" id="openTabIfMissing"> 沒有查詢頁時，自動開啟背景分頁</label>
+
+      <div class="notice">
+        為避免造成伺服器負擔，自動查詢最低間隔固定為 120 分鐘，建議 360 分鐘。Chrome 開啟時不會立刻查詢，會先確認是否已到「下次允許查詢時間」，再隨機延遲後才查詢。
+      </div>
+
+      <div class="row">
+        <div class="col-3">
+          <label for="startupDelayMinMinutes">Chrome 啟動延遲下限，分鐘</label>
+          <input type="number" id="startupDelayMinMinutes" min="1" step="1">
+        </div>
+        <div class="col-3">
+          <label for="startupDelayMaxMinutes">Chrome 啟動延遲上限，分鐘</label>
+          <input type="number" id="startupDelayMaxMinutes" min="1" step="1">
+        </div>
+        <div class="col-3">
+          <label for="scheduleJitterMaxMinutes">排程隨機延遲上限，分鐘</label>
+          <input type="number" id="scheduleJitterMaxMinutes" min="0" step="5">
+        </div>
+        <div class="col-3">
+          <label for="manualCooldownMinutes">手動查詢冷卻，分鐘</label>
+          <input type="number" id="manualCooldownMinutes" min="1" step="1">
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-3">
+          <label for="recipientDelayMinSeconds">多人查詢間隔下限，秒</label>
+          <input type="number" id="recipientDelayMinSeconds" min="1" step="1">
+        </div>
+        <div class="col-3">
+          <label for="recipientDelayMaxSeconds">多人查詢間隔上限，秒</label>
+          <input type="number" id="recipientDelayMaxSeconds" min="1" step="1">
+        </div>
+        <div class="col-6">
+          <label>排程說明</label>
+          <p class="small">預設：每 6 小時查詢一次；Chrome 啟動後隨機 5–30 分鐘；每次查詢後下一次自動查詢再加 0–30 分鐘隨機延遲；多人查詢每人間隔 5–15 秒。</p>
+        </div>
+      </div>
     </div>
 
     <div class="card">

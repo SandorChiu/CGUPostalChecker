@@ -1,13 +1,23 @@
 const POSTAL_URL = "https://www4.is.cgu.edu.tw/postal/studentletter.aspx";
-const ALARM_NAME = "cgu_postal_periodic_check";
+const POSTAL_URL_PATTERN = "https://www4.is.cgu.edu.tw/postal/*";
+const AUTO_CHECK_ALARM = "cgu_postal_auto_check";
+const STARTUP_DELAY_ALARM = "cgu_postal_startup_delayed_check";
 const MAX_LOGS = 500;
 const MAX_SEEN_KEYS = 3000;
+const RUN_TIMEOUT_MS = 3 * 60 * 1000;
 
 const DEFAULT_SETTINGS = {
   enabled: false,
   checkOnStartup: true,
   intervalEnabled: true,
-  intervalMinutes: 30,
+  intervalMinutes: 360,
+  minAutoIntervalMinutes: 120,
+  startupDelayMinMinutes: 5,
+  startupDelayMaxMinutes: 30,
+  scheduleJitterMaxMinutes: 30,
+  manualCooldownMinutes: 5,
+  recipientDelayMinSeconds: 5,
+  recipientDelayMaxSeconds: 15,
   onlyWithinHours: false,
   activeStartTime: "08:00",
   activeEndTime: "18:00",
@@ -27,7 +37,11 @@ const DEFAULT_SETTINGS = {
   lastCountsByRecipient: {},
   lastRecipientDetails: {},
   lastCheckTime: "",
-  lastResultText: "尚未查詢"
+  lastResultText: "尚未查詢",
+  lastManualCheckAt: 0,
+  lastAutoCheckAt: 0,
+  nextAllowedCheckAt: 0,
+  activeRun: null
 };
 
 function nowIso() {
@@ -52,6 +66,17 @@ function hashString(str) {
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function randomInt(min, max) {
+  const a = Math.ceil(Number(min));
+  const b = Math.floor(Number(max));
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return Math.max(0, a || 0);
+  return Math.floor(Math.random() * (b - a + 1)) + a;
 }
 
 function recipientKey(recipient) {
@@ -81,6 +106,16 @@ function statusLabel(status) {
   })[normalized] || "全部";
 }
 
+function formatDateTimeForUi(timestamp) {
+  const ts = Number(timestamp || 0);
+  if (!ts) return "尚未排定";
+  try {
+    return new Date(ts).toLocaleString("zh-TW");
+  } catch {
+    return String(timestamp);
+  }
+}
+
 function buildActionTitle(settings) {
   const baseTitle = "長庚大學自動查詢郵件";
   const recipients = (settings.recipients || []).filter(r => r && r.enabled && r.name);
@@ -98,7 +133,6 @@ function buildActionTitle(settings) {
     return `${recipient.name} ${label} ${count}件`;
   });
 
-  // Windows / Chrome 工具列 tooltip 常只顯示第一行，所以必須用單行呈現。
   return [baseTitle, ...lines].join("｜");
 }
 
@@ -119,6 +153,13 @@ async function setDefaultsIfNeeded() {
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     if (data[key] === undefined) patch[key] = value;
   }
+
+  // 1.0.6 之後為避免伺服器負擔，自動查詢最低間隔強制為 120 分鐘。
+  // 若舊版曾儲存 30 分鐘等較短間隔，升級後自動改成建議值 360 分鐘。
+  if (data.intervalMinutes !== undefined && Number(data.intervalMinutes) < 120) {
+    patch.intervalMinutes = 360;
+  }
+
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 }
 
@@ -161,28 +202,134 @@ function isWithinAllowedTime(settings) {
   const start = settings.activeStartTime || "00:00";
   const end = settings.activeEndTime || "23:59";
 
-  if (start <= end) {
-    return current >= start && current <= end;
-  }
-
-  // 支援跨午夜，例如 22:00 到 08:00
+  if (start <= end) return current >= start && current <= end;
   return current >= start || current <= end;
 }
 
-async function createOrUpdateAlarm(settings) {
-  await chrome.alarms.clear(ALARM_NAME);
-  if (!settings.enabled || !settings.intervalEnabled) return;
+function effectiveAutoIntervalMinutes(settings) {
+  const configured = Number(settings.intervalMinutes || DEFAULT_SETTINGS.intervalMinutes);
+  const minimum = Number(settings.minAutoIntervalMinutes || DEFAULT_SETTINGS.minAutoIntervalMinutes);
+  return Math.max(configured, minimum, 120);
+}
 
-  const minutes = Math.max(Number(settings.intervalMinutes || 30), 5);
-  await chrome.alarms.create(ALARM_NAME, { periodInMinutes: minutes });
+function calculateNextAllowedCheckAt(settings, from = Date.now()) {
+  const intervalMin = effectiveAutoIntervalMinutes(settings);
+  const jitterMax = Math.max(0, Number(settings.scheduleJitterMaxMinutes ?? DEFAULT_SETTINGS.scheduleJitterMaxMinutes));
+  const jitterMin = jitterMax > 0 ? randomInt(0, jitterMax) : 0;
+  return from + (intervalMin + jitterMin) * 60 * 1000;
+}
+
+async function scheduleAutoAlarm(settings = null, options = {}) {
+  const cfg = settings || await getSettings();
+  await chrome.alarms.clear(AUTO_CHECK_ALARM);
+
+  if (!cfg.enabled || !cfg.intervalEnabled) return;
+
+  const now = Date.now();
+  let nextAllowed = Number(cfg.nextAllowedCheckAt || 0);
+
+  if (options.forceNew || !nextAllowed) {
+    nextAllowed = calculateNextAllowedCheckAt(cfg, now);
+    await chrome.storage.local.set({ nextAllowedCheckAt: nextAllowed });
+  }
+
+  const when = Math.max(nextAllowed, now + 60 * 1000);
+  await chrome.alarms.create(AUTO_CHECK_ALARM, { when });
+}
+
+async function scheduleRetryAutoAlarm(minutes = 60) {
+  const settings = await getSettings();
+  if (!settings.enabled || !settings.intervalEnabled) return;
+  const when = Date.now() + Math.max(10, Number(minutes || 60)) * 60 * 1000;
+  await chrome.alarms.clear(AUTO_CHECK_ALARM);
+  await chrome.alarms.create(AUTO_CHECK_ALARM, { when });
+  await appendLog({ type: "auto_retry_scheduled", message: `自動查詢暫緩，約 ${minutes} 分鐘後再檢查` });
+}
+
+async function clearRunIfStale() {
+  const data = await chrome.storage.local.get(["activeRun"]);
+  const activeRun = data.activeRun;
+  if (!activeRun || !activeRun.startedAtMs) return false;
+  const age = Date.now() - Number(activeRun.startedAtMs || 0);
+  if (age <= RUN_TIMEOUT_MS) return false;
+
+  await chrome.storage.local.set({ activeRun: null, pendingParse: null });
+  await appendLog({ type: "stale_run_cleared", message: "前一次查詢超過 3 分鐘未完成，已自動解除查詢鎖" });
+  return true;
+}
+
+async function hasActiveRun() {
+  await clearRunIfStale();
+  const data = await chrome.storage.local.get(["activeRun"]);
+  return Boolean(data.activeRun && data.activeRun.status && data.activeRun.status !== "done");
+}
+
+async function canRunManual(settings) {
+  const now = Date.now();
+  const cooldownMs = Math.max(1, Number(settings.manualCooldownMinutes || DEFAULT_SETTINGS.manualCooldownMinutes)) * 60 * 1000;
+  const last = Number(settings.lastManualCheckAt || 0);
+  if (last && now - last < cooldownMs) {
+    const remainSec = Math.ceil((cooldownMs - (now - last)) / 1000);
+    const remainMin = Math.ceil(remainSec / 60);
+    return { ok: false, message: `剛剛已手動查詢過，請約 ${remainMin} 分鐘後再試。` };
+  }
+  return { ok: true };
+}
+
+async function canRunAuto(settings, reason) {
+  if (!settings.enabled) return { ok: false, message: "自動監控尚未啟用" };
+  if (!isWithinAllowedTime(settings)) return { ok: false, message: "目前不在允許查詢時段" };
+
+  const now = Date.now();
+  const nextAllowed = Number(settings.nextAllowedCheckAt || 0);
+  if (nextAllowed && now < nextAllowed) {
+    return { ok: false, message: `尚未到下次允許查詢時間：${formatDateTimeForUi(nextAllowed)}` };
+  }
+  return { ok: true };
+}
+
+async function scheduleStartupDelayedCheck(settings) {
+  await chrome.alarms.clear(STARTUP_DELAY_ALARM);
+  if (!settings.enabled || !settings.checkOnStartup) return;
+
+  const canAuto = await canRunAuto(settings, "startup");
+  if (!canAuto.ok) {
+    await appendLog({ type: "startup_skipped", message: canAuto.message });
+    await scheduleAutoAlarm(settings);
+    return;
+  }
+
+  const minDelay = Math.max(1, Number(settings.startupDelayMinMinutes || DEFAULT_SETTINGS.startupDelayMinMinutes));
+  const maxDelay = Math.max(minDelay, Number(settings.startupDelayMaxMinutes || DEFAULT_SETTINGS.startupDelayMaxMinutes));
+  const delayMin = randomInt(minDelay, maxDelay);
+  await chrome.alarms.create(STARTUP_DELAY_ALARM, { when: Date.now() + delayMin * 60 * 1000 });
+  await appendLog({ type: "startup_delayed", message: `Chrome 啟動後不立即查詢，已隨機延遲約 ${delayMin} 分鐘` });
+}
+
+async function markRunStartedByReason(reason, settings) {
+  const now = Date.now();
+  const patch = {};
+  if (["manual", "start_button"].includes(reason)) {
+    patch.lastManualCheckAt = now;
+  }
+  if (["interval", "startup", "startup_delayed"].includes(reason)) {
+    patch.lastAutoCheckAt = now;
+  }
+
+  // 不論自動或手動，只要真的開始查詢，都重新排定下一次自動允許時間，避免手動剛查完又立刻自動查。
+  const nextAllowed = calculateNextAllowedCheckAt(settings, now);
+  patch.nextAllowedCheckAt = nextAllowed;
+  await chrome.storage.local.set(patch);
+  const updated = { ...settings, ...patch };
+  await scheduleAutoAlarm(updated);
 }
 
 async function findOrOpenPostalTab(settings) {
-  const tabs = await chrome.tabs.query({ url: `${POSTAL_URL}*` });
-  if (tabs.length > 0) return tabs[0];
+  const tabs = await chrome.tabs.query({ url: POSTAL_URL_PATTERN });
+  const preferred = tabs.find(t => t.url && t.url.startsWith(POSTAL_URL)) || tabs[0];
+  if (preferred) return preferred;
 
   if (!settings.openTabIfMissing) return null;
-
   return await chrome.tabs.create({ url: POSTAL_URL, active: false });
 }
 
@@ -216,12 +363,8 @@ async function waitForTabComplete(tabId, timeoutMs = 15000) {
 
 async function ensureContentScript(tabId) {
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content.js"]
-    });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
   } catch (err) {
-    // content script 可能已經由 manifest 載入；這裡失敗不一定代表不能送訊息。
     console.warn("executeScript warning", err);
   }
 }
@@ -247,7 +390,30 @@ async function notify(title, message) {
 async function startRun(reason = "manual") {
   const settings = await getSettings();
 
-  if (!isWithinAllowedTime(settings)) {
+  if (await hasActiveRun()) {
+    await appendLog({ type: "skipped", reason, message: "已有查詢流程進行中，略過本次查詢" });
+    return { ok: false, message: "已有查詢流程進行中，請稍後再試" };
+  }
+
+  const isManualReason = ["manual", "start_button"].includes(reason);
+  const isAutoReason = ["interval", "startup", "startup_delayed"].includes(reason);
+
+  if (isManualReason) {
+    const manualAllowed = await canRunManual(settings);
+    if (!manualAllowed.ok) {
+      await appendLog({ type: "skipped", reason, message: manualAllowed.message });
+      return manualAllowed;
+    }
+  }
+
+  if (isAutoReason) {
+    const autoAllowed = await canRunAuto(settings, reason);
+    if (!autoAllowed.ok) {
+      await appendLog({ type: "skipped", reason, message: autoAllowed.message });
+      await scheduleAutoAlarm(settings);
+      return autoAllowed;
+    }
+  } else if (!isWithinAllowedTime(settings)) {
     await appendLog({ type: "skipped", reason, message: "目前不在允許查詢時段" });
     return { ok: false, message: "目前不在允許查詢時段" };
   }
@@ -258,30 +424,44 @@ async function startRun(reason = "manual") {
     return { ok: false, message: "尚未設定啟用中的收件人" };
   }
 
-  const tab = await findOrOpenPostalTab(settings);
-  if (!tab || !tab.id) {
-    await appendLog({ type: "error", reason, message: "找不到郵件查詢頁面" });
-    return { ok: false, message: "找不到郵件查詢頁面" };
-  }
-
-  await waitForTabComplete(tab.id);
-  await ensureContentScript(tab.id);
-
   const runId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const activeRun = {
     runId,
-    tabId: tab.id,
+    tabId: null,
     recipients,
     index: 0,
     reason,
     startedAt: nowIso(),
-    status: "running"
+    startedAtMs: Date.now(),
+    status: "preparing"
   };
   await chrome.storage.local.set({ activeRun });
 
-  await appendLog({ type: "run_started", reason, message: `開始查詢 ${recipients.length} 位收件人` });
-  await runRecipient(tab.id, activeRun, 0);
-  return { ok: true, message: "已開始查詢" };
+  try {
+    await markRunStartedByReason(reason, settings);
+
+    const tab = await findOrOpenPostalTab(settings);
+    if (!tab || !tab.id) {
+      await chrome.storage.local.set({ activeRun: null });
+      await appendLog({ type: "error", reason, message: "找不到郵件查詢頁面" });
+      return { ok: false, message: "找不到郵件查詢頁面" };
+    }
+
+    activeRun.tabId = tab.id;
+    activeRun.status = "running";
+    await chrome.storage.local.set({ activeRun });
+
+    await waitForTabComplete(tab.id);
+    await ensureContentScript(tab.id);
+
+    await appendLog({ type: "run_started", reason, message: `開始查詢 ${recipients.length} 位收件人` });
+    await runRecipient(tab.id, activeRun, 0);
+    return { ok: true, message: "已開始查詢" };
+  } catch (err) {
+    await chrome.storage.local.set({ activeRun: null, pendingParse: null });
+    await appendLog({ type: "error", reason, message: String(err && err.message ? err.message : err) });
+    return { ok: false, message: String(err && err.message ? err.message : err) };
+  }
 }
 
 async function runRecipient(tabId, activeRun, index) {
@@ -294,11 +474,14 @@ async function runRecipient(tabId, activeRun, index) {
   activeRun.index = index;
   activeRun.status = "filling";
   activeRun.currentRecipient = recipient;
+  activeRun.startedAtMs = Number(activeRun.startedAtMs || Date.now());
+  activeRun.currentRecipientStartedAtMs = Date.now();
   await chrome.storage.local.set({ activeRun });
 
   const response = await sendToTab(tabId, {
     type: "CGU_RUN_RECIPIENT",
     runId: activeRun.runId,
+    tabId,
     index,
     recipient,
     defaults: {
@@ -336,10 +519,13 @@ async function finishRun(activeRun, status = "done") {
   const settings = await getSettings();
   await chrome.storage.local.set({
     activeRun: null,
+    pendingParse: null,
     lastCheckTime: nowIso(),
     lastResultText: status === "done" ? "查詢完成" : status
   });
-  await setBadgeFromCounts(settings);
+  const updated = await getSettings();
+  await setBadgeFromCounts(updated);
+  await scheduleAutoAlarm(updated);
   await appendLog({ type: "run_finished", message: "本輪查詢完成" });
 }
 
@@ -354,24 +540,37 @@ async function continueNext(runId, currentIndex) {
     return;
   }
 
-  // 給頁面一點時間穩定，再跑下一位。
-  setTimeout(async () => {
-    const fresh = (await chrome.storage.local.get(["activeRun"])).activeRun;
-    if (!fresh || fresh.runId !== runId) return;
-    await runRecipient(fresh.tabId, fresh, nextIndex);
-  }, 1000);
+  const settings = await getSettings();
+  const minSec = Math.max(1, Number(settings.recipientDelayMinSeconds || DEFAULT_SETTINGS.recipientDelayMinSeconds));
+  const maxSec = Math.max(minSec, Number(settings.recipientDelayMaxSeconds || DEFAULT_SETTINGS.recipientDelayMaxSeconds));
+  const delaySec = randomInt(minSec, maxSec);
+  await appendLog({ type: "recipient_delay", message: `下一位收件人查詢將延遲約 ${delaySec} 秒` });
+  await sleep(delaySec * 1000);
+
+  const fresh = (await chrome.storage.local.get(["activeRun"])).activeRun;
+  if (!fresh || fresh.runId !== runId) return;
+  await runRecipient(fresh.tabId, fresh, nextIndex);
 }
 
 async function processResult(message) {
-  const { runId, index, recipient, rows, pageMessage } = message;
+  const { runId, tabId, index, recipient, rows, pageMessage } = message;
   const data = await chrome.storage.local.get(["activeRun"]);
   const activeRun = data.activeRun;
   if (!activeRun || activeRun.runId !== runId) return;
+  if (activeRun.tabId && tabId && activeRun.tabId !== tabId) {
+    await appendLog({ type: "ignored_result", message: "收到非本次查詢分頁的結果，已忽略" });
+    return;
+  }
+  if (Number(activeRun.index) !== Number(index)) {
+    await appendLog({ type: "ignored_result", message: "收到非目前收件人的結果，已忽略" });
+    return;
+  }
 
   const settings = await getSettings();
+  const rowList = Array.isArray(rows) ? rows : [];
   const seen = new Set(settings.seenKeys || []);
-  const allKeys = (rows || []).map(row => signatureForRow(recipient, row));
-  const newRows = (rows || []).filter((row, i) => !seen.has(allKeys[i]));
+  const allKeys = rowList.map(row => signatureForRow(recipient, row));
+  const newRows = rowList.filter((row, i) => !seen.has(allKeys[i]));
 
   for (const key of allKeys) seen.add(key);
   const seenKeys = Array.from(seen).slice(-MAX_SEEN_KEYS);
@@ -379,7 +578,7 @@ async function processResult(message) {
   const queryKey = recipientQueryKey(recipient, settings);
   const statusValue = normalizeSettingValue(recipient.status, settings.defaultStatus ?? "0");
   const lastCountsByRecipient = settings.lastCountsByRecipient || {};
-  lastCountsByRecipient[queryKey] = rows.length;
+  lastCountsByRecipient[queryKey] = rowList.length;
 
   const lastRecipientDetails = settings.lastRecipientDetails || {};
   lastRecipientDetails[queryKey] = {
@@ -389,7 +588,7 @@ async function processResult(message) {
     statusLabel: statusLabel(statusValue),
     dateType: normalizeSettingValue(recipient.dateType, settings.dateType ?? "0"),
     dateInterval: normalizeSettingValue(recipient.dateInterval, settings.dateInterval ?? "1"),
-    count: rows.length,
+    count: rowList.length,
     checkedAt: nowIso()
   };
 
@@ -398,21 +597,21 @@ async function processResult(message) {
     lastCountsByRecipient,
     lastRecipientDetails,
     lastCheckTime: nowIso(),
-    lastResultText: `${recipient.name}：${rows.length} 筆，新增 ${newRows.length} 筆`
+    lastResultText: `${recipient.name}：${rowList.length} 筆，新增 ${newRows.length} 筆`
   });
 
   await appendLog({
-    type: rows.length ? "mail_found" : "no_mail",
+    type: rowList.length ? "mail_found" : "no_mail",
     recipient: recipient.name,
     status: statusLabel(statusValue),
-    count: rows.length,
+    count: rowList.length,
     newCount: newRows.length,
     pageMessage: pageMessage || "",
-    rows: rows.slice(0, 20),
-    message: rows.length ? `查到 ${rows.length} 筆，新增 ${newRows.length} 筆` : "沒有查到郵件"
+    rows: rowList.slice(0, 20),
+    message: rowList.length ? `查到 ${rowList.length} 筆，新增 ${newRows.length} 筆` : "沒有查到郵件"
   });
 
-  await maybeNotify(settings, recipient, rows, newRows);
+  await maybeNotify(settings, recipient, rowList, newRows);
 
   const updatedSettings = await getSettings();
   await setBadgeFromCounts(updatedSettings);
@@ -438,9 +637,7 @@ async function maybeNotify(settings, recipient, rows, newRows) {
     return;
   }
 
-  if (!settings.notifyOncePerDay && newRows.length === 0) {
-    return;
-  }
+  if (!settings.notifyOncePerDay && newRows.length === 0) return;
 
   lastNotifyDateByRecipient[key] = today;
   await chrome.storage.local.set({ lastNotifyDateByRecipient });
@@ -456,39 +653,42 @@ async function maybeNotify(settings, recipient, rows, newRows) {
 chrome.runtime.onInstalled.addListener(async () => {
   await setDefaultsIfNeeded();
   const settings = await getSettings();
-  await createOrUpdateAlarm(settings);
+  await scheduleAutoAlarm(settings);
   await setBadgeFromCounts(settings);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await setDefaultsIfNeeded();
   const settings = await getSettings();
-  await createOrUpdateAlarm(settings);
   await setBadgeFromCounts(settings);
-  if (settings.enabled && settings.checkOnStartup) {
-    await startRun("startup");
-  }
+  await scheduleAutoAlarm(settings);
+  await scheduleStartupDelayedCheck(settings);
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== ALARM_NAME) return;
-  await startRun("interval");
+  if (alarm.name === AUTO_CHECK_ALARM) {
+    await startRun("interval");
+    return;
+  }
+  if (alarm.name === STARTUP_DELAY_ALARM) {
+    await startRun("startup_delayed");
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message.type === "CGU_START_MONITOR") {
-      const settings = await getSettings();
-      settings.enabled = true;
       await chrome.storage.local.set({ enabled: true });
-      await createOrUpdateAlarm(settings);
+      const settings = await getSettings();
+      await scheduleAutoAlarm(settings);
       sendResponse(await startRun("start_button"));
       return;
     }
 
     if (message.type === "CGU_STOP_MONITOR") {
-      await chrome.storage.local.set({ enabled: false, activeRun: null });
-      await chrome.alarms.clear(ALARM_NAME);
+      await chrome.storage.local.set({ enabled: false, activeRun: null, pendingParse: null });
+      await chrome.alarms.clear(AUTO_CHECK_ALARM);
+      await chrome.alarms.clear(STARTUP_DELAY_ALARM);
       await chrome.action.setBadgeText({ text: "" });
       const stoppedSettings = await getSettings();
       await chrome.action.setTitle({ title: buildActionTitle(stoppedSettings) });
@@ -522,8 +722,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.type === "CGU_SETTINGS_UPDATED") {
       const settings = await getSettings();
-      await createOrUpdateAlarm(settings);
-      await setBadgeFromCounts(settings);
+      const interval = effectiveAutoIntervalMinutes(settings);
+      const patch = { intervalMinutes: interval };
+      if (settings.enabled && settings.intervalEnabled && !settings.nextAllowedCheckAt) {
+        patch.nextAllowedCheckAt = calculateNextAllowedCheckAt({ ...settings, intervalMinutes: interval });
+      }
+      if (Object.keys(patch).length) await chrome.storage.local.set(patch);
+      const updated = await getSettings();
+      await scheduleAutoAlarm(updated);
+      await setBadgeFromCounts(updated);
       sendResponse({ ok: true });
       return;
     }

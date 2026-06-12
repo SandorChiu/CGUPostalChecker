@@ -2,7 +2,14 @@ const DEFAULT_SETTINGS = {
   enabled: false,
   checkOnStartup: true,
   intervalEnabled: true,
-  intervalMinutes: 30,
+  intervalMinutes: 360,
+  minAutoIntervalMinutes: 120,
+  startupDelayMinMinutes: 5,
+  startupDelayMaxMinutes: 30,
+  scheduleJitterMaxMinutes: 30,
+  manualCooldownMinutes: 5,
+  recipientDelayMinSeconds: 5,
+  recipientDelayMaxSeconds: 15,
   onlyWithinHours: false,
   activeStartTime: "08:00",
   activeEndTime: "18:00",
@@ -68,7 +75,13 @@ async function loadSettings() {
     document.getElementById(key).checked = Boolean(settings[key]);
   }
 
-  document.getElementById("intervalMinutes").value = settings.intervalMinutes || 30;
+  document.getElementById("intervalMinutes").value = Math.max(settings.intervalMinutes || 360, 120);
+  document.getElementById("startupDelayMinMinutes").value = settings.startupDelayMinMinutes || 5;
+  document.getElementById("startupDelayMaxMinutes").value = settings.startupDelayMaxMinutes || 30;
+  document.getElementById("scheduleJitterMaxMinutes").value = settings.scheduleJitterMaxMinutes ?? 30;
+  document.getElementById("manualCooldownMinutes").value = settings.manualCooldownMinutes || 5;
+  document.getElementById("recipientDelayMinSeconds").value = settings.recipientDelayMinSeconds || 5;
+  document.getElementById("recipientDelayMaxSeconds").value = settings.recipientDelayMaxSeconds || 15;
   document.getElementById("activeStartTime").value = settings.activeStartTime || "08:00";
   document.getElementById("activeEndTime").value = settings.activeEndTime || "18:00";
 
@@ -81,12 +94,25 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  const interval = Math.max(Number(document.getElementById("intervalMinutes").value || 30), 5);
+  const interval = Math.max(Number(document.getElementById("intervalMinutes").value || 360), 120);
+  const startupDelayMin = Math.max(Number(document.getElementById("startupDelayMinMinutes").value || 5), 1);
+  const startupDelayMax = Math.max(Number(document.getElementById("startupDelayMaxMinutes").value || 30), startupDelayMin);
+  const scheduleJitterMax = Math.max(Number(document.getElementById("scheduleJitterMaxMinutes").value || 0), 0);
+  const manualCooldown = Math.max(Number(document.getElementById("manualCooldownMinutes").value || 5), 1);
+  const recipientDelayMin = Math.max(Number(document.getElementById("recipientDelayMinSeconds").value || 5), 1);
+  const recipientDelayMax = Math.max(Number(document.getElementById("recipientDelayMaxSeconds").value || 15), recipientDelayMin);
   const settings = {
     enabled: document.getElementById("enabled").checked,
     checkOnStartup: document.getElementById("checkOnStartup").checked,
     intervalEnabled: document.getElementById("intervalEnabled").checked,
     intervalMinutes: interval,
+    minAutoIntervalMinutes: 120,
+    startupDelayMinMinutes: startupDelayMin,
+    startupDelayMaxMinutes: startupDelayMax,
+    scheduleJitterMaxMinutes: scheduleJitterMax,
+    manualCooldownMinutes: manualCooldown,
+    recipientDelayMinSeconds: recipientDelayMin,
+    recipientDelayMaxSeconds: recipientDelayMax,
     onlyWithinHours: document.getElementById("onlyWithinHours").checked,
     activeStartTime: document.getElementById("activeStartTime").value || "08:00",
     activeEndTime: document.getElementById("activeEndTime").value || "18:00",

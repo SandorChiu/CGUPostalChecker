@@ -139,12 +139,13 @@
   }
 
   async function runRecipient(message) {
-    const { runId, index, recipient } = message;
+    const { runId, tabId, index, recipient } = message;
 
     if (!isQueryPageReady()) {
       chrome.runtime.sendMessage({
         type: "CGU_LOGIN_REQUIRED",
         runId,
+        tabId,
         index,
         recipient,
         message: "找不到查詢欄位，可能尚未登入或頁面不是郵件查詢頁"
@@ -160,6 +161,7 @@
     await chrome.storage.local.set({
       pendingParse: {
         runId,
+        tabId,
         index,
         recipient,
         submittedAt: Date.now()
@@ -188,6 +190,7 @@
       chrome.runtime.sendMessage({
         type: "CGU_LOGIN_REQUIRED",
         runId: pending.runId,
+        tabId: pending.tabId,
         index: pending.index,
         recipient: pending.recipient,
         message: "查詢後找不到表單，可能登入失效"
@@ -204,6 +207,7 @@
     chrome.runtime.sendMessage({
       type: "CGU_QUERY_RESULT",
       runId: pending.runId,
+      tabId: pending.tabId,
       index: pending.index,
       recipient: pending.recipient,
       rows,

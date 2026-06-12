@@ -18,6 +18,7 @@ async function loadStatus() {
     "enabled",
     "recipients",
     "lastCheckTime",
+    "nextAllowedCheckAt",
     "lastResultText"
   ]);
 
@@ -33,6 +34,7 @@ async function loadStatus() {
   const recipients = (data.recipients || []).filter(r => r.enabled && r.name);
   document.getElementById("recipientCount").textContent = `${recipients.length} 人`;
   document.getElementById("lastCheckTime").textContent = formatTime(data.lastCheckTime);
+  document.getElementById("nextAllowedCheckAt").textContent = data.nextAllowedCheckAt ? new Date(Number(data.nextAllowedCheckAt)).toLocaleString() : "尚未排定";
   document.getElementById("lastResultText").textContent = data.lastResultText || "尚未查詢";
 }
 
