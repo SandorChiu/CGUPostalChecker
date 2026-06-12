@@ -58,6 +58,19 @@ function recipientKey(recipient) {
   return recipient.receiverId || recipient.name || "未命名收件人";
 }
 
+function normalizeSettingValue(value, fallback = "") {
+  if (value === undefined || value === null) return String(fallback ?? "");
+  return String(value);
+}
+
+function recipientQueryKey(recipient, settings = {}) {
+  const base = recipientKey(recipient);
+  const status = normalizeSettingValue(recipient.status, settings.defaultStatus ?? "0");
+  const dateType = normalizeSettingValue(recipient.dateType, settings.dateType ?? "0");
+  const dateInterval = normalizeSettingValue(recipient.dateInterval, settings.dateInterval ?? "1");
+  return `${base}::status=${status}::dateType=${dateType}::dateInterval=${dateInterval}`;
+}
+
 function statusLabel(status) {
   const normalized = status === undefined || status === null ? "" : String(status);
   return ({
@@ -71,25 +84,28 @@ function statusLabel(status) {
 function buildActionTitle(settings) {
   const baseTitle = "長庚大學自動查詢郵件";
   const recipients = (settings.recipients || []).filter(r => r && r.enabled && r.name);
-  if (!recipients.length) return `${baseTitle}\n尚未設定啟用中的收件人`;
+  if (!recipients.length) return `${baseTitle}｜尚未設定啟用中的收件人`;
 
   const counts = settings.lastCountsByRecipient || {};
   const detail = settings.lastRecipientDetails || {};
 
   const lines = recipients.map(recipient => {
-    const key = recipientKey(recipient);
-    const saved = detail[key] || {};
-    const count = Number(counts[key] ?? saved.count ?? 0);
-    const label = statusLabel(recipient.status ?? saved.status ?? settings.defaultStatus ?? "0");
-    return `${recipient.name}  ${label}  ${count}件`;
+    const queryKey = recipientQueryKey(recipient, settings);
+    const saved = detail[queryKey] || {};
+    const count = Number(counts[queryKey] ?? saved.count ?? 0);
+    const statusValue = normalizeSettingValue(recipient.status, saved.status ?? settings.defaultStatus ?? "0");
+    const label = statusLabel(statusValue);
+    return `${recipient.name} ${label} ${count}件`;
   });
 
-  return [baseTitle, ...lines].join("\n");
+  // Windows / Chrome 工具列 tooltip 常只顯示第一行，所以必須用單行呈現。
+  return [baseTitle, ...lines].join("｜");
 }
 
 function signatureForRow(recipient, row) {
-  const raw = JSON.stringify({ recipient: recipientKey(recipient), row });
-  return `${recipientKey(recipient)}::${hashString(raw)}`;
+  const queryKey = recipientQueryKey(recipient);
+  const raw = JSON.stringify({ recipient: queryKey, row });
+  return `${queryKey}::${hashString(raw)}`;
 }
 
 async function getSettings() {
@@ -120,11 +136,9 @@ async function setBadgeFromCounts(settings) {
   let total = 0;
   if (recipients.length) {
     total = recipients.reduce((sum, recipient) => {
-      const key = recipientKey(recipient);
-      return sum + Number(counts[key] || 0);
+      const queryKey = recipientQueryKey(recipient, settings);
+      return sum + Number(counts[queryKey] || 0);
     }, 0);
-  } else {
-    total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
   }
 
   if (!settings.showBadge) {
@@ -362,15 +376,19 @@ async function processResult(message) {
   for (const key of allKeys) seen.add(key);
   const seenKeys = Array.from(seen).slice(-MAX_SEEN_KEYS);
 
-  const key = recipientKey(recipient);
+  const queryKey = recipientQueryKey(recipient, settings);
+  const statusValue = normalizeSettingValue(recipient.status, settings.defaultStatus ?? "0");
   const lastCountsByRecipient = settings.lastCountsByRecipient || {};
-  lastCountsByRecipient[key] = rows.length;
+  lastCountsByRecipient[queryKey] = rows.length;
 
   const lastRecipientDetails = settings.lastRecipientDetails || {};
-  lastRecipientDetails[key] = {
+  lastRecipientDetails[queryKey] = {
     name: recipient.name,
-    status: recipient.status ?? settings.defaultStatus ?? "0",
-    statusLabel: statusLabel(recipient.status ?? settings.defaultStatus ?? "0"),
+    receiverId: recipient.receiverId || "",
+    status: statusValue,
+    statusLabel: statusLabel(statusValue),
+    dateType: normalizeSettingValue(recipient.dateType, settings.dateType ?? "0"),
+    dateInterval: normalizeSettingValue(recipient.dateInterval, settings.dateInterval ?? "1"),
     count: rows.length,
     checkedAt: nowIso()
   };
@@ -386,6 +404,7 @@ async function processResult(message) {
   await appendLog({
     type: rows.length ? "mail_found" : "no_mail",
     recipient: recipient.name,
+    status: statusLabel(statusValue),
     count: rows.length,
     newCount: newRows.length,
     pageMessage: pageMessage || "",
@@ -405,7 +424,7 @@ async function maybeNotify(settings, recipient, rows, newRows) {
   if (!settings.notifyOnlyWhenMailExists) return;
 
   const today = localDateKey();
-  const key = recipientKey(recipient);
+  const key = recipientQueryKey(recipient, settings);
   const lastNotifyDateByRecipient = settings.lastNotifyDateByRecipient || {};
 
   if (settings.notifyOncePerDay && lastNotifyDateByRecipient[key] === today) {

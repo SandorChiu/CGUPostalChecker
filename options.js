@@ -126,7 +126,7 @@ document.getElementById("openTutorial").addEventListener("click", () => {
 
 document.getElementById("clearSeen").addEventListener("click", async () => {
   if (!confirm("確定清除已看過郵件紀錄？清除後，既有郵件可能會再次被視為新資料。")) return;
-  await chrome.storage.local.set({ seenKeys: [], lastCountsByRecipient: {} });
+  await chrome.storage.local.set({ seenKeys: [], lastCountsByRecipient: {}, lastRecipientDetails: {}, lastNotifyDateByRecipient: {} });
   chrome.runtime.sendMessage({ type: "CGU_SETTINGS_UPDATED" });
   showMessage("已清除已看過郵件紀錄");
 });
