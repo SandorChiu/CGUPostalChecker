@@ -186,3 +186,123 @@ hr {
   .row { grid-template-columns: 1fr; }
   .col-2, .col-3, .col-4, .col-6, .col-12 { grid-column: span 1; }
 }
+
+/* Popup：各收件人查詢結果 */
+.popup {
+  width: 390px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.popup-results-section {
+  margin: 0;
+}
+
+.popup-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.popup-section-header h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.result-total {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.recipient-results {
+  display: grid;
+  gap: 8px;
+  max-height: 245px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.popup-recipient-result {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: #fff;
+}
+
+.popup-recipient-result.has-mail {
+  border-color: #b6d4fe;
+  background: #f4f8ff;
+}
+
+.popup-recipient-result.checking {
+  border-color: #ffe69c;
+  background: #fff9e6;
+}
+
+.popup-recipient-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.popup-recipient-identity {
+  min-width: 0;
+}
+
+.popup-recipient-name {
+  font-size: 14px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-recipient-condition {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.popup-recipient-count {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  color: var(--primary-dark);
+}
+
+.popup-recipient-count strong {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.popup-recipient-count span {
+  font-size: 12px;
+}
+
+.popup-recipient-meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.popup-querying-label {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #664d03;
+  background: #fff3cd;
+}
+
+.recipient-result-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+}

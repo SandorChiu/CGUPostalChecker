@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "長庚大學自動查詢郵件",
   "short_name": "長庚郵件查詢",
-  "version": "1.0.6",
-  "description": "自動定時查詢長庚大學郵件收發管理系統，支援多位收件人、郵件狀態分開統計、冷卻時間、隨機延遲與每日一次提醒。",
+  "version": "1.0.7",
+  "description": "自動定時查詢長庚大學郵件收發管理系統，支援多位收件人、郵件狀態分開統計、冷卻時間、隨機延遲、每日一次提醒，以及 Popup 顯示各人查詢結果。",
   "permissions": [
     "alarms",
     "notifications",
